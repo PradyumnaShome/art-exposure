@@ -4,6 +4,9 @@ use serde::{Deserialize};
 use rand::Rng;
 use std::process::Command;
 use std::env;
+use std::path::Path;
+use std::fs;
+use glob::glob;
 
 extern crate image;
 
@@ -17,8 +20,6 @@ extern crate cocoa;
 use cocoa::appkit::{NSScreen};
 use cocoa::foundation::NSRect;
 use cocoa::base::nil;
-
-use dirs::home_dir;
 
 #[derive(Deserialize)]
 struct SearchResult {
@@ -85,8 +86,7 @@ fn main() -> Result<(), reqwest::Error> {
     let home_dir = match env::var("HOME") {
         Ok(path) => path,
         Err(_) => {
-            eprintln!("Error: HOME environment variable is not set.");
-            return;
+            panic!("Error: HOME environment variable is not set.");
         }
     };
 
@@ -96,8 +96,7 @@ fn main() -> Result<(), reqwest::Error> {
     // Create the directory if it doesn't exist
     if !target_dir_path.exists() {
         if let Err(err) = fs::create_dir(&target_dir_path) {
-            eprintln!("Error creating directory: {:?}", err);
-            return;
+            panic!("Error creating directory: {:?}", err);
         }
     }
 
@@ -209,7 +208,7 @@ fn main() -> Result<(), reqwest::Error> {
     let file_name = image_artist.clone().unwrap() + &String::from(" - ") + &image_title.clone().unwrap() + &String::from(".png");
 
     // Step 5: Save the image to a file
-    resized_image_with_transparent_border.save(target_dir_path.join(file_name.clone()).unwrap());
+    resized_image_with_transparent_border.save(target_dir_path.join(file_name.clone())).unwrap();
 
     // Step 6: Set the macOS background
     match Command::new("osascript")
@@ -225,7 +224,7 @@ fn main() -> Result<(), reqwest::Error> {
             Err(err) => println!("Error setting background: {}", err),
         }
     
-    let db_path = target_dir_path.join("Library/Application Support/Dock/desktoppicture.db");
+    let db_path = Path::new(&home_dir).join("Library/Application Support/Dock/desktoppicture.db");
 
     let _ = Command::new("sqlite3")
         .arg(db_path)

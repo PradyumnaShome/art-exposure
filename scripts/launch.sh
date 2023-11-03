@@ -1,2 +1,2 @@
 #!/bin/bash
-target/release/art-exposure
+target/release/art-exposure "Pop Art"

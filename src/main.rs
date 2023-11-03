@@ -1,5 +1,4 @@
 use glob::glob;
-use rand::Rng;
 use reqwest;
 use reqwest::blocking::Response;
 use serde::Deserialize;
@@ -8,27 +7,24 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-extern crate image;
-
-use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView, ImageBuffer, Rgba, RgbaImage};
-
 extern crate url;
 
 extern crate cocoa;
+extern crate image;
 
-use cocoa::appkit::NSScreen;
-use cocoa::base::nil;
-use cocoa::foundation::NSRect;
+use image::{ImageBuffer, Rgba};
+
+mod image_processing;
+mod api_client;
 
 #[derive(Deserialize)]
-struct SearchResult {
+pub struct SearchResult {
     #[serde(rename = "objectIDs")]
     object_ids: Vec<u32>,
 }
 
 #[derive(Deserialize, Clone)]
-struct ImageInfo {
+pub struct ImageInfo {
     #[serde(rename = "title")]
     title: String,
     #[serde(rename = "artistDisplayName")]
@@ -50,53 +46,6 @@ fn make_filename_safe(input: &str) -> String {
         }
     }
     result
-}
-
-fn add_transparent_border(image: &DynamicImage, border_width: u32) -> RgbaImage {
-    let (original_width, original_height) = image.dimensions();
-    let new_width = original_width + 2 * border_width;
-    let new_height = original_height + 2 * border_width;
-
-    let mut new_image = ImageBuffer::new(new_width, new_height);
-
-    for x in 0..new_width {
-        for y in 0..new_height {
-            if x < border_width
-                || x >= new_width - border_width
-                || y < border_width
-                || y >= new_height - border_width
-            {
-                new_image.put_pixel(x, y, Rgba([0, 0, 0, 0])); // Transparent border
-            } else {
-                let original_x = x - border_width;
-                let original_y = y - border_width;
-                let pixel = image.get_pixel(original_x, original_y);
-                new_image.put_pixel(x, y, pixel);
-            }
-        }
-    }
-
-    new_image
-}
-
-fn resize_image(image_data: &Vec<u8>) -> DynamicImage {
-    let new_height: u32 = unsafe {
-        let screen = NSScreen::mainScreen(nil);
-        let frame: NSRect = NSScreen::frame(screen);
-        frame.size.height as u32
-    };
-
-    println!("Scaling to height: {}", new_height);
-
-    let image = image::load_from_memory(image_data).unwrap();
-
-    let (width, height) = image.dimensions();
-
-    image.resize(
-        ((width as f32 * new_height as f32) / height as f32) as u32,
-        new_height,
-        FilterType::Lanczos3,
-    )
 }
 
 fn initialize_app_data(app_data_dir: &Path) {
@@ -130,46 +79,12 @@ fn initialize_app_data(app_data_dir: &Path) {
     }
 }
 
-fn fetch_random_image(response: &SearchResult) -> Option<ImageInfo> {
-    let mut tried_image_count = 0;
-    let max_tries = 20;
-    let mut rng = rand::thread_rng();
-    let mut image_info: Option<ImageInfo>;
+fn process_image(unprocessed_image: &mut Vec<u8>, image_info: &ImageInfo, font_path: &String) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
+    let resized_image = image_processing::resize_image(unprocessed_image);
 
-    while tried_image_count < max_tries {
-        // Pick a random object ID from the response
-        let random_index = rng.gen_range(0, response.object_ids.len());
-        let random_object_id = response.object_ids[random_index];
+    let image_with_transparent_border = image_processing::add_transparent_border(resized_image, 100);
 
-        // Make a GET request to the object API
-        let object_url = format!(
-            "https://collectionapi.metmuseum.org/public/collection/v1/objects/{}",
-            random_object_id
-        );
-
-        image_info = match reqwest::blocking::get(&object_url).unwrap().json() {
-            Ok(info) => Some(info),
-            Err(err) => {
-                println!("Error getting object info: {}", err);
-                continue;
-            }
-        };
-        match image_info.clone().unwrap().url.is_empty() {
-            false => {
-                return image_info;
-            }
-            _ => (),
-        };
-
-        tried_image_count += 1;
-    }
-    return None;
-}
-
-fn process_image(unprocessed_image: &mut Vec<u8>) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
-    let resized_image = resize_image(unprocessed_image);
-
-    add_transparent_border(&resized_image, 100)
+    image_processing::add_text_to_image(image_with_transparent_border, &image_info.title, &image_info.artist, font_path)
 }
 
 fn set_wallpaper_macos(home_dir: &str, app_data_dir: &Path, file_name: &String) {
@@ -217,10 +132,18 @@ fn main() -> Result<(), reqwest::Error> {
 
     initialize_app_data(&app_data_dir);
 
-    let query = match args.len() {
-        1 => "Impressionism".to_string(),
-        2 => args[1].clone(),
-        _ => panic!("Usage: ./art-exposure [search term]"),
+    let mut font_path = "fonts/Lato-Regular.ttf".to_string();
+    let mut query = "Impressionism".to_string();
+
+    match args.len() {
+        3 => {
+            query = args[1].clone();
+            font_path = args[2].clone();
+        },
+        _ => {
+            println!("Usage: ./art-exposure [search term] [path to .ttf file]");
+            println!("Using default search term: {} and font {}", query, font_path);
+        }
     };
 
     let uri_encoded_query =
@@ -234,7 +157,7 @@ fn main() -> Result<(), reqwest::Error> {
     // Make a GET request to the search API
     let response: SearchResult = reqwest::blocking::get(&search_url)?.json().unwrap();
 
-    let image_info = match fetch_random_image(&response) {
+    let image_info = match api_client::fetch_random_image(&response) {
         Some(data) => data,
         None => {
             panic!("Could not find an image with a URL");
@@ -259,7 +182,7 @@ fn main() -> Result<(), reqwest::Error> {
     let mut image_data = Vec::new();
     image_response.unwrap().copy_to(&mut image_data)?;
 
-    let processed_image = process_image(&mut image_data);
+    let processed_image = process_image(&mut image_data, &image_info, &font_path);
 
     let file_name = image_info.artist.clone()
         + &String::from(" - ")
@@ -272,6 +195,8 @@ fn main() -> Result<(), reqwest::Error> {
     processed_image
         .save(&app_data_dir.join(safe_file_name.clone()))
         .unwrap();
+
+    println!("Saved image to {}", &app_data_dir.join(safe_file_name.clone()).to_str().unwrap());
 
     // Set the wallpaper
     set_wallpaper(&home_dir, &app_data_dir, &safe_file_name);

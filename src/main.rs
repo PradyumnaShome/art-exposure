@@ -81,6 +81,49 @@ fn main() -> Result<(), reqwest::Error> {
     // Get the command-line arguments
     let args: Vec<String> = env::args().collect();
 
+    // Get the home directory
+    let home_dir = match env::var("HOME") {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("Error: HOME environment variable is not set.");
+            return;
+        }
+    };
+
+    // Create the target directory path
+    let target_dir_path = Path::new(&home_dir).join("art-exposure");
+
+    // Create the directory if it doesn't exist
+    if !target_dir_path.exists() {
+        if let Err(err) = fs::create_dir(&target_dir_path) {
+            eprintln!("Error creating directory: {:?}", err);
+            return;
+        }
+    }
+
+    // Define the file extensions to remove
+    let file_extensions = ["jpg", "jpeg", "png"];
+
+    // Iterate through the specified extensions and remove matching files
+    for extension in &file_extensions {
+        let pattern = format!("{}/*.{}", target_dir_path.to_str().unwrap(), extension);
+
+        // Use the glob crate to match files
+        if let Ok(entries) = glob(&pattern) {
+            for entry in entries {
+                if let Ok(path) = entry {
+                    if path.is_file() {
+                        if let Err(err) = fs::remove_file(&path) {
+                            eprintln!("Error removing file: {:?}", err);
+                        }
+                    }
+                }
+            }
+        } else {
+            eprintln!("Error matching files with extension: {}", extension);
+        }
+    }
+
     let query = match args.len() {
         1 => "Impressionism".to_string(),
         2 => args[1].clone(),
@@ -166,15 +209,14 @@ fn main() -> Result<(), reqwest::Error> {
     let file_name = image_artist.clone().unwrap() + &String::from(" - ") + &image_title.clone().unwrap() + &String::from(".png");
 
     // Step 5: Save the image to a file
-    resized_image_with_transparent_border.save(file_name.clone()).unwrap();
+    resized_image_with_transparent_border.save(target_dir_path.join(file_name.clone()).unwrap());
 
     // Step 6: Set the macOS background
     match Command::new("osascript")
         .arg("-e")
         .arg(format!(
             "tell application \"System Events\" to set picture of every desktop to \"{}\"",
-            std::env::current_dir()
-                .unwrap()
+            target_dir_path
                 .join(file_name.clone())
                 .display()
         ))
@@ -183,11 +225,7 @@ fn main() -> Result<(), reqwest::Error> {
             Err(err) => println!("Error setting background: {}", err),
         }
     
-    let db_path =  if let Some(home) = home_dir() {
-        home.join("Library/Application Support/Dock/desktoppicture.db")
-    } else {
-        panic!("Could not find home directory");
-    };
+    let db_path = target_dir_path.join("Library/Application Support/Dock/desktoppicture.db");
 
     let _ = Command::new("sqlite3")
         .arg(db_path)

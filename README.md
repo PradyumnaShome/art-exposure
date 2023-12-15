@@ -16,8 +16,10 @@ Add a CRON entry to have the script run at a regular time interval.
 `crontab -e`
 
 ```
-0 6 * * * /path/to/scripts/launch.sh
+0 9-23 * * * /path/to/scripts/launch.sh
 ```
+
+The above example updates your wallpaper on every hour between 09.00 and 23.00 inclusive (your device needs to be connected to the Internet for this to work).
 
 Use https://cron.help/ to identify your preferred cadence.
 
